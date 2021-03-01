@@ -200,7 +200,76 @@ def read_107db(starttime, endtime):
 
 
 
+df = read_107db('2019-11-00 17:08:50', '2020-07-00 17:08:50')
 
+
+
+mag_bool = df['Notes'].map(lambda x:'Start Mag Cycle' in x or 'Mag Cycle complete' in x or 'Mag Cycle Canceled' in x).to_list()
+mag_bool[0] = True
+mag_bool[-1] = True
+filepaths = df['Filepath'].to_numpy(dtype = str)
+log_bool = (filepaths[:-1] != filepaths[1:])
+log_indicies = np.where(log_bool)[0].tolist()
+indicies = df.index[mag_bool].to_list()
+indicies.extend(log_indicies) 
+indicies.sort()
+
+
+
+#Create a dictionary storing cooldown and warmup logs
+
+coolwarmfiles = {} #Initialize dictionary
+coolwarm_count = 0 
+
+coolwarmfiles['cooldown']=log.iloc[all_indicies[0]:all_indicies[1],:]
+coolwarmfiles['warmup']=log.iloc[all_indicies[-2]:all_indicies[-1],:]
+coolwarmfiles['cooldown']['Hours'] = (coolwarmfiles['cooldown']['Date/Time']-coolwarmfiles['cooldown'].iloc[0,0]).dt.total_seconds()/3600
+coolwarmfiles['warmup']['Hours'] = (coolwarmfiles['warmup']['Date/Time']-coolwarmfiles['warmup'].iloc[0,0]).dt.total_seconds()/3600
+
+
+#Create a dictionary storing regen logs
+
+#Determine ADR cycle start via Notes column
+regen_booleans = log['Notes'].map(lambda x:'Start Mag Cycle' in x).to_list()
+#Create list of indicies where ADR cycle starts
+regen_indicies = log.index[regen_booleans].to_list()
+regenfiles = {} #Initialize dictionary
+    regen_count = 0 #Counter variable for naming dictionary keys
+    for x in range(len(regen_indicies)):
+        #Check if magnet turns on (current reaches above 15 A) and if magnet cycle lasts appropriate length of time (between 3 to 5 hours)
+        if log.iloc[regen_indicies[x]:all_indicies[all_indicies.index(regen_indicies[x])+1],8].map(lambda x:x>15).any() and \
+        3<((log.iloc[all_indicies[all_indicies.index(regen_indicies[x])+1],0]-log.iloc[regen_indicies[x],0]).total_seconds()/3600)<5:
+            regen_count += 1
+            #Add regen log to dictionary and reset index
+            regenfiles['regen{}'.format(regen_count)]=log.iloc[regen_indicies[x]:all_indicies[all_indicies.index(regen_indicies[x])+1],:].reset_index(drop=True)
+            #Reset "Hours from Start" column
+            regenfiles['regen{}'.format(regen_count)]["Hours"] = (regenfiles['regen{}'.format(regen_count)]['Date/Time']-regenfiles['regen{}'.format(regen_count)].iloc[0,0]).dt.total_seconds()/3600
+
+
+    #Create a dictionary storing reg logs
+
+    #Determine ADR cycle completion via Notes column
+    reg_booleans = log['Notes'].map(lambda x:'Mag Cycle complete' in x or 'Mag Cycle Canceled' in x).to_list()
+    #Create list of indicies where ADR cycle completes
+    reg_indicies = log.index[reg_booleans].to_list()
+    regfiles = {} #Initialize dictionary
+    reg_count = 0 #Counter variable for naming dictionary keys
+    for x in range(len(reg_indicies)):
+        #Check if magnet current is reasonable (above 0.1 A and below 2 A)
+        if not log.iloc[reg_indicies[x]:all_indicies[all_indicies.index(reg_indicies[x])+1],8].map(lambda x:x<0.1).all() and \
+        not log.iloc[reg_indicies[x]:all_indicies[all_indicies.index(reg_indicies[x])+1],8].map(lambda x:x>2).any():
+            reg_count += 1
+            #Add reg log to dictionary and reset index
+            regfiles['reg{}'.format(reg_count)]=log.iloc[reg_indicies[x]:all_indicies[all_indicies.index(reg_indicies[x])+1],:].reset_index(drop=True)
+            #Reset "Hours from Start" column
+            regfiles['reg{}'.format(reg_count)]["Hours"] = (regfiles['reg{}'.format(reg_count)]['Date/Time']-regfiles['reg{}'.format(reg_count)].iloc[0,0]).dt.total_seconds()/3600
+            #Replace 0 values in "50 mK FAA" column with NaN
+            regfiles['reg{}'.format(reg_count)]['50mK'].replace(0,np.nan,inplace=True)
+    #Filter warmup data from temperature holds
+    regfiles = temphold_filter(regfiles)
+
+
+'''
 
 # Writing all log files on SUSHI to db
 '''
@@ -214,7 +283,7 @@ time = t2-t1
 '''
 
 # Reading from db
-
+'''
 t1 = time.perf_counter()
 dataDF1 = read_107db("2020-06-23 17:39:30", "2020-06-23 17:39:60") # 30 seconds of data
 t2 = time.perf_counter()
@@ -226,7 +295,7 @@ dataDF2 = read_107db("2020-06-18 17:39:30", "2020-07-23 17:39:30") # 1 month of 
 t2 = time.perf_counter()
 time2 = t2-t1
 print(time)
-
+'''
 
 
 
