@@ -192,50 +192,50 @@ def read_107db(starttime, endtime):
     cur.execute("SELECT * FROM Cryo107 WHERE Id BETWEEN ? AND ? ORDER BY Id", (starttime, endtime))
     data = cur.fetchall()
     dataDF = pd.DataFrame(data, columns = ['Date/Time','Hours','50mK','He-3','3K','MagnetDiode','50K','Setpoint','Current','Voltage','Notes', 'Filepath'])
-    dataDF["Date/Time"] = pd.to_datetime(dataDF["Date/Time"])
+    dataDF["Date/Time"] = pd.to_datetime(dataDF["Date/Time"], errors = 'coerce')
     cur.close()
     return dataDF
 
 def split_db(df):
 
-    #Create a list of indicies where cooldowns, warmups, regen cycles, and temperature holds may start 
+    #Create a list of indicies where cooldowns, warmups, regen cycles, and temperature holds may start
     regen_bool = df['Notes'].map(lambda x:'Start Mag Cycle' in x).to_list()
-    reg_bool = df['Notes'].map(lambda x:'Mag Cycle complete' in x or 'Mag Cycle Canceled' in x).to_list() 
-    
+    reg_bool = df['Notes'].map(lambda x:'Mag Cycle complete' in x or 'Mag Cycle Canceled' in x).to_list()
+
     filepaths = df['Filepath'].to_numpy(dtype = str)
     log_bool = (filepaths[:-1] != filepaths[1:])
-    
+
     log_indicies = np.where(log_bool)[0].tolist()
     regen_indicies = df.index[regen_bool].to_list()
     reg_indicies = df.index[reg_bool].to_list()
-    
+
     indicies = []
-    indicies.extend(log_indicies) 
+    indicies.extend(log_indicies)
     indicies.extend(regen_indicies)
     indicies.extend(reg_indicies)
     indicies.extend([0,len(df.index)])
     indicies.sort()
-    
-    
-    
+
+
+
     #Create a dictionary storing cooldown and warmup logs
-    
+
     coolwarmfiles = {} #Initialize dictionary
     cool_count = 0 #Create counter variables for cooldown and warmup phases
-    warm_count = 0 
-    
+    warm_count = 0
+
     #Cooldowns may occur at the very beginning of the DF or right after the filepath name changes
     #Warmups may occur at the very end of the DF or right before the filepath name changes
-    
+
     #Extract phase at the beginning and end of the DF
-    firstlog = df.iloc[indicies[0]:indicies[1],:].reset_index(drop=True) 
+    firstlog = df.iloc[indicies[0]:indicies[1],:].reset_index(drop=True)
     lastlog = df.iloc[indicies[-2]:indicies[-1],:].reset_index(drop=True)
-    
+
     #Check if phase at beginning is a cooldown
     if firstlog['50mK'].between(284,286).any() and firstlog['50mK'].between(3.5,4.5).any():
-        cool_count += 1 
+        cool_count += 1
         coolwarmfiles['cooldown{}'.format(cool_count)]=firstlog
-        
+
     #Check phases before and after the filepath name changes. Add to dictionary if condition is met
     for x in range(len(log_indicies)):
         coollog = df.iloc[log_indicies[x]+1:indicies[indicies.index(log_indicies[x])+1],:].reset_index(drop=True)
@@ -244,19 +244,19 @@ def split_db(df):
             cool_count += 1
             coolwarmfiles['cooldown{}'.format(cool_count)]=coollog
         if warmlog['50mK'].between(284,286).any() and warmlog['50mK'].between(3.5,4.5).any():
-            warm_count += 1 
+            warm_count += 1
             coolwarmfiles['warmup{}'.format(warm_count)]=warmlog
-    
+
     #Check if phase at end is a warmup
     if lastlog['50mK'].between(284,286).any() and lastlog['50mK'].between(3.5,4.5).any():
-        warm_count += 1 
+        warm_count += 1
         coolwarmfiles['warmup{}'.format(warm_count)]=lastlog
-    
-    
-    
-    
+
+
+
+
     #Create a dictionary storing regen logs
-    
+
     regenfiles = {} #Initialize dictionary
     regen_count = 0 #Counter variable for naming dictionary keys
     for x in range(len(regen_indicies)):
@@ -268,10 +268,10 @@ def split_db(df):
             regenfiles['regen{}'.format(regen_count)]= regenlog
             #Reset "Hours from Start" column
             regenfiles['regen{}'.format(regen_count)]["Hours"] = (regenfiles['regen{}'.format(regen_count)]['Date/Time']-regenfiles['regen{}'.format(regen_count)].iloc[0,0]).dt.total_seconds()/3600
-    
-    
+
+
     #Create a dictionary storing reg logs
-    
+
     regfiles = {} #Initialize dictionary
     reg_count = 0 #Counter variable for naming dictionary keys
     for x in range(len(reg_indicies)):
@@ -285,15 +285,16 @@ def split_db(df):
             regfiles['reg{}'.format(reg_count)]["Hours"] = (regfiles['reg{}'.format(reg_count)]['Date/Time']-regfiles['reg{}'.format(reg_count)].iloc[0,0]).dt.total_seconds()/3600
             #Replace 0 values in "50 mK FAA" column with NaN
             regfiles['reg{}'.format(reg_count)]['50mK'].replace(0,np.nan,inplace=True)
-                
+
     #Filter warmup data from temperature holds
     regfiles = temphold_filter(regfiles)
-    
+
     return (coolwarmfiles, regenfiles, regfiles)
 
+# dtype = {"Hours":np.float64, "50mK":np.float64, 'He-3':np.float64, "3K":np.float64, "MagnetDiode":np.float64, '50K':np.float64, "Current":np.float64, "Voltage":np.float64, "Setpoint":np.float64, 'Notes':str, 'Filepath':str}
 
-# Writing all log files on SUSHI to db 
-#DO NOT UNCOMMENT!!! 
+# Writing all log files on SUSHI to db
+# DO NOT UNCOMMENT!
 '''
 t1 = time.perf_counter()
 files = os.listdir("/local/dp/HPD ADR 107 Logs Test")
@@ -305,24 +306,23 @@ time = t2-t1
 '''
 
 # Reading from db
+# Compare loading csv to reading db
 '''
 t1 = time.perf_counter()
-dataDF1 = read_107db("2020-06-23 17:39:30", "2020-06-23 17:39:60") # 30 seconds of data
+logcsv = load_csv('/local/dp/HPD ADR 107 Logs Test/2020_06_18_17;08snout_swissx2_1BM.csv')
 t2 = time.perf_counter()
-time1 = t2-t1
-print(time)
-
-t1 = time.perf_counter()
-dataDF2 = read_107db("2020-06-18 17:39:30", "2020-07-23 17:39:30") # 1 month of data
-t2 = time.perf_counter()
-time2 = t2-t1
-print(time)
+time3 = t2 - t1 #15 s
 '''
 
-#Arbitrary query
+'''
+logdb = read_107db("	2020-06-18 17:08:47", '2020-06-18 17:09:47')
+'''
+
+
+# Arbitrary query
+# Includes 2 complete log files. The separation matches that of loaded .csv files
 '''
 df = read_107db('2019-11-00 17:08:50', '2020-09-00 17:08:50')
-splitdf = split_df(df) 
+splitdf = split_db(df)
 '''
-
 
