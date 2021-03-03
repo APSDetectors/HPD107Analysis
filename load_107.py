@@ -163,7 +163,6 @@ Reading and writing to database
 
 
 def load_db(filepath):
-
     #Load relevant columns 107 log
     log_filepath = r'{}'.format(filepath)
     log_107 = pd.read_csv(log_filepath, usecols = [0,1,2,3,5,7,8,9,12,13,18], index_col = 0, skiprows = [1,2], na_filter=False, dtype = {"Note":str, "Hours after Start":np.float64, "50 mK FAA Temperature":np.float64, "3 K Stage Diode":np.float64, "Magnet Diode":np.float64, "Magnet Current":np.float64, "Power Supply Voltage":np.float64, "PID Setpoint":np.float64})
@@ -197,81 +196,104 @@ def read_107db(starttime, endtime):
     cur.close()
     return dataDF
 
+def split_db(df):
 
-
-
-df = read_107db('2019-11-00 17:08:50', '2020-07-00 17:08:50')
-
-
-
-mag_bool = df['Notes'].map(lambda x:'Start Mag Cycle' in x or 'Mag Cycle complete' in x or 'Mag Cycle Canceled' in x).to_list()
-mag_bool[0] = True
-mag_bool[-1] = True
-filepaths = df['Filepath'].to_numpy(dtype = str)
-log_bool = (filepaths[:-1] != filepaths[1:])
-log_indicies = np.where(log_bool)[0].tolist()
-indicies = df.index[mag_bool].to_list()
-indicies.extend(log_indicies) 
-indicies.sort()
-
-
-
-#Create a dictionary storing cooldown and warmup logs
-
-coolwarmfiles = {} #Initialize dictionary
-coolwarm_count = 0 
-
-coolwarmfiles['cooldown']=log.iloc[all_indicies[0]:all_indicies[1],:]
-coolwarmfiles['warmup']=log.iloc[all_indicies[-2]:all_indicies[-1],:]
-coolwarmfiles['cooldown']['Hours'] = (coolwarmfiles['cooldown']['Date/Time']-coolwarmfiles['cooldown'].iloc[0,0]).dt.total_seconds()/3600
-coolwarmfiles['warmup']['Hours'] = (coolwarmfiles['warmup']['Date/Time']-coolwarmfiles['warmup'].iloc[0,0]).dt.total_seconds()/3600
-
-
-#Create a dictionary storing regen logs
-
-#Determine ADR cycle start via Notes column
-regen_booleans = log['Notes'].map(lambda x:'Start Mag Cycle' in x).to_list()
-#Create list of indicies where ADR cycle starts
-regen_indicies = log.index[regen_booleans].to_list()
-regenfiles = {} #Initialize dictionary
+    #Create a list of indicies where cooldowns, warmups, regen cycles, and temperature holds may start 
+    regen_bool = df['Notes'].map(lambda x:'Start Mag Cycle' in x).to_list()
+    reg_bool = df['Notes'].map(lambda x:'Mag Cycle complete' in x or 'Mag Cycle Canceled' in x).to_list() 
+    
+    filepaths = df['Filepath'].to_numpy(dtype = str)
+    log_bool = (filepaths[:-1] != filepaths[1:])
+    
+    log_indicies = np.where(log_bool)[0].tolist()
+    regen_indicies = df.index[regen_bool].to_list()
+    reg_indicies = df.index[reg_bool].to_list()
+    
+    indicies = []
+    indicies.extend(log_indicies) 
+    indicies.extend(regen_indicies)
+    indicies.extend(reg_indicies)
+    indicies.extend([0,len(df.index)])
+    indicies.sort()
+    
+    
+    
+    #Create a dictionary storing cooldown and warmup logs
+    
+    coolwarmfiles = {} #Initialize dictionary
+    cool_count = 0 #Create counter variables for cooldown and warmup phases
+    warm_count = 0 
+    
+    #Cooldowns may occur at the very beginning of the DF or right after the filepath name changes
+    #Warmups may occur at the very end of the DF or right before the filepath name changes
+    
+    #Extract phase at the beginning and end of the DF
+    firstlog = df.iloc[indicies[0]:indicies[1],:].reset_index(drop=True) 
+    lastlog = df.iloc[indicies[-2]:indicies[-1],:].reset_index(drop=True)
+    
+    #Check if phase at beginning is a cooldown
+    if firstlog['50mK'].between(284,286).any() and firstlog['50mK'].between(3.5,4.5).any():
+        cool_count += 1 
+        coolwarmfiles['cooldown{}'.format(cool_count)]=firstlog
+        
+    #Check phases before and after the filepath name changes. Add to dictionary if condition is met
+    for x in range(len(log_indicies)):
+        coollog = df.iloc[log_indicies[x]+1:indicies[indicies.index(log_indicies[x])+1],:].reset_index(drop=True)
+        warmlog = df.iloc[indicies[indicies.index(log_indicies[x])-1]:log_indicies[x],:].reset_index(drop=True)
+        if coollog['50mK'].between(284,286).any() and coollog['50mK'].between(3.5,4.5).any():
+            cool_count += 1
+            coolwarmfiles['cooldown{}'.format(cool_count)]=coollog
+        if warmlog['50mK'].between(284,286).any() and warmlog['50mK'].between(3.5,4.5).any():
+            warm_count += 1 
+            coolwarmfiles['warmup{}'.format(warm_count)]=warmlog
+    
+    #Check if phase at end is a warmup
+    if lastlog['50mK'].between(284,286).any() and lastlog['50mK'].between(3.5,4.5).any():
+        warm_count += 1 
+        coolwarmfiles['warmup{}'.format(warm_count)]=lastlog
+    
+    
+    
+    
+    #Create a dictionary storing regen logs
+    
+    regenfiles = {} #Initialize dictionary
     regen_count = 0 #Counter variable for naming dictionary keys
     for x in range(len(regen_indicies)):
         #Check if magnet turns on (current reaches above 15 A) and if magnet cycle lasts appropriate length of time (between 3 to 5 hours)
-        if log.iloc[regen_indicies[x]:all_indicies[all_indicies.index(regen_indicies[x])+1],8].map(lambda x:x>15).any() and \
-        3<((log.iloc[all_indicies[all_indicies.index(regen_indicies[x])+1],0]-log.iloc[regen_indicies[x],0]).total_seconds()/3600)<5:
+        regenlog = df.iloc[regen_indicies[x]:indicies[indicies.index(regen_indicies[x])+1],:].reset_index(drop=True)
+        if regenlog['Current'].map(lambda x:x>15).any() and 3<((regenlog.iloc[-1,0]-regenlog.iloc[0,0]).total_seconds()/3600)<5:
             regen_count += 1
             #Add regen log to dictionary and reset index
-            regenfiles['regen{}'.format(regen_count)]=log.iloc[regen_indicies[x]:all_indicies[all_indicies.index(regen_indicies[x])+1],:].reset_index(drop=True)
+            regenfiles['regen{}'.format(regen_count)]= regenlog
             #Reset "Hours from Start" column
             regenfiles['regen{}'.format(regen_count)]["Hours"] = (regenfiles['regen{}'.format(regen_count)]['Date/Time']-regenfiles['regen{}'.format(regen_count)].iloc[0,0]).dt.total_seconds()/3600
-
-
+    
+    
     #Create a dictionary storing reg logs
-
-    #Determine ADR cycle completion via Notes column
-    reg_booleans = log['Notes'].map(lambda x:'Mag Cycle complete' in x or 'Mag Cycle Canceled' in x).to_list()
-    #Create list of indicies where ADR cycle completes
-    reg_indicies = log.index[reg_booleans].to_list()
+    
     regfiles = {} #Initialize dictionary
     reg_count = 0 #Counter variable for naming dictionary keys
     for x in range(len(reg_indicies)):
+        reglog = df.iloc[reg_indicies[x]:indicies[indicies.index(reg_indicies[x])+1],:].reset_index(drop=True)
         #Check if magnet current is reasonable (above 0.1 A and below 2 A)
-        if not log.iloc[reg_indicies[x]:all_indicies[all_indicies.index(reg_indicies[x])+1],8].map(lambda x:x<0.1).all() and \
-        not log.iloc[reg_indicies[x]:all_indicies[all_indicies.index(reg_indicies[x])+1],8].map(lambda x:x>2).any():
+        if not reglog.iloc[:,8].map(lambda x:x<0.1).all() and not reglog.iloc[:,8].map(lambda x:x>2).any():
             reg_count += 1
             #Add reg log to dictionary and reset index
-            regfiles['reg{}'.format(reg_count)]=log.iloc[reg_indicies[x]:all_indicies[all_indicies.index(reg_indicies[x])+1],:].reset_index(drop=True)
+            regfiles['reg{}'.format(reg_count)]=reglog
             #Reset "Hours from Start" column
             regfiles['reg{}'.format(reg_count)]["Hours"] = (regfiles['reg{}'.format(reg_count)]['Date/Time']-regfiles['reg{}'.format(reg_count)].iloc[0,0]).dt.total_seconds()/3600
             #Replace 0 values in "50 mK FAA" column with NaN
             regfiles['reg{}'.format(reg_count)]['50mK'].replace(0,np.nan,inplace=True)
+                
     #Filter warmup data from temperature holds
     regfiles = temphold_filter(regfiles)
+    
+    return (coolwarmfiles, regenfiles, regfiles)
 
 
-'''
-
-# Writing all log files on SUSHI to db
+# Writing all log files on SUSHI to db 
+#DO NOT UNCOMMENT!!! 
 '''
 t1 = time.perf_counter()
 files = os.listdir("/local/dp/HPD ADR 107 Logs Test")
@@ -297,5 +319,10 @@ time2 = t2-t1
 print(time)
 '''
 
+#Arbitrary query
+'''
+df = read_107db('2019-11-00 17:08:50', '2020-09-00 17:08:50')
+splitdf = split_df(df) 
+'''
 
 
