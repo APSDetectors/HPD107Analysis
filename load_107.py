@@ -36,7 +36,7 @@ def load_csv(filepath):
     log_107.columns = column_names
 
     #Convert type of "Date/Time" column from string to datetime
-    log_107['Date/Time'] = pd.to_datetime(log_107['Date/Time'], infer_datetime_format=True)
+    log_107['Date/Time'] = pd.to_datetime(log_107['Date/Time'], format = '%m/%d/%Y %H:%M:%S')
 
     return log_107
 
@@ -188,11 +188,13 @@ def to_107db(filelist):
 
 def read_107db(starttime, endtime):
     conn = sqlite3.connect('cryo107.sqlite', detect_types=sqlite3.PARSE_DECLTYPES)
+    #dataDF = pd.read_sql("SELECT * FROM Cryo107 WHERE Id > :start and Id < :end", conn, params = {'start':starttime, 'end':endtime}, parse_dates = {'Id': {'format':'%Y-%m-%d %H:%M:%S'}})
+
     cur = conn.cursor()
-    cur.execute("SELECT * FROM Cryo107 WHERE Id BETWEEN ? AND ? ORDER BY Id", (starttime, endtime))
+    cur.execute("SELECT * FROM Cryo107 WHERE Id > ? AND Id < ? ORDER BY Id", (starttime, endtime))
     data = cur.fetchall()
     dataDF = pd.DataFrame(data, columns = ['Date/Time','Hours','50mK','He-3','3K','MagnetDiode','50K','Setpoint','Current','Voltage','Notes', 'Filepath'])
-    dataDF["Date/Time"] = pd.to_datetime(dataDF["Date/Time"], errors = 'coerce')
+    dataDF["Date/Time"] = pd.to_datetime(dataDF["Date/Time"], format = '%Y-%m-%d %H:%M:%S', errors = 'coerce')
     cur.close()
     return dataDF
 
@@ -291,8 +293,6 @@ def split_db(df):
 
     return (coolwarmfiles, regenfiles, regfiles)
 
-# dtype = {"Hours":np.float64, "50mK":np.float64, 'He-3':np.float64, "3K":np.float64, "MagnetDiode":np.float64, '50K':np.float64, "Current":np.float64, "Voltage":np.float64, "Setpoint":np.float64, 'Notes':str, 'Filepath':str}
-
 # Writing all log files on SUSHI to db
 # DO NOT UNCOMMENT!
 '''
@@ -305,24 +305,55 @@ t2 = time.perf_counter()
 time = t2-t1
 '''
 
-# Reading from db
-# Compare loading csv to reading db
+
+
+# Pandas function compared to hard SQL with and without parsing dates reading 1 month of data using profiler
+# Times are averages of 3 trials
+# logdb = read_107db('2020-06-28 17:07:37', '2020-07-28 17:07:37')
+
+'''
+Pandas: 6.6 s
+With date/time parsing: 6.9 s
+
+Hard SQL: 6.1 s
+With date/time parsing: 6.5 s
+
+'''
+
+# Pandas function compared to hard SQL reading 1 year of data using timer
+# Times are averages of 3 trials
+
 '''
 t1 = time.perf_counter()
-logcsv = load_csv('/local/dp/HPD ADR 107 Logs Test/2020_06_18_17;08snout_swissx2_1BM.csv')
+df = read_107db('2019-11-00 17:08:50', '2020-11-00 17:08:50')
 t2 = time.perf_counter()
-time3 = t2 - t1 #15 s
+time3 = t2 - t1
 '''
 
 '''
-logdb = read_107db("	2020-06-18 17:08:47", '2020-06-18 17:09:47')
+Pandas function: 40.0 s
+Hard SQL: 40.1 s
 '''
 
 
-# Arbitrary query
-# Includes 2 complete log files. The separation matches that of loaded .csv files
+# Compare loading csv to reading db
+# Times are averages of 2 trials
+
 '''
-df = read_107db('2019-11-00 17:08:50', '2020-09-00 17:08:50')
-splitdf = split_db(df)
+Load from .csv
+t1 = time.perf_counter()
+logcsv = load_csv('/local/dp/HPD ADR 107 Logs Test/2019_11_01_17;38snout_swissx_M-452x2_1BM.csv')
+t2 = time.perf_counter()
+time3 = t2 - t1
+18.30 s
+'''
+
+'''
+Read from database
+t1 = time.perf_counter()
+logdb = read_107db('2019-11-01 17:39:05', '2019-12-19 09:15:00')
+t2 = time.perf_counter()
+time3 = t2 - t1
+9.75 s
 '''
 
